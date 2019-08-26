@@ -1,117 +1,76 @@
-import bs4
-from bs4 import BeautifulSoup
-from urllib.request import urlopen
-from urllib.parse import urlencode
-import json
-from datetime import datetime, timedelta
-import time
-import calendar
-import numbers
+# import the needed libraries
+import requests
+import pandas as pd
+import time # for timing script
+import xml.etree.ElementTree as ET # built in library
 
-def get_news_data(search_term, data_filter=''):
-    # Search through Google News with the "search_term" and get the headlines 
-    # and the contents of the news that was released today, this week, this month, 
-    # or this year ("date_filter"). 
-    # 
-    # Parameters: 
-    #   search_term  -  a string that will be used by the function to search the news in Google News 
-    #                   e.g. 'Samsung Galaxy Note 9', 'Basketball' 
-    #   date_filter  -  date that will filter available news 
-    #                   'today' - get headlines of the news that are released only in today 
-    #                   'this_week' - get headlines of the news that are released in this week 
-    #                   'this month' - news released in this month 
-    #                   'this_year' - news released in this year
-    #                    number - news released in number of days ago
-   
-
-    today_datetime = datetime.today()
-    last_datetime = today_datetime - timedelta(days=7)
-    yesterday_datetime = today_datetime - timedelta(days=1)
-
-    today_date = today_datetime.strftime('%Y-%m-%d')
-    
-    this_year = today_datetime.strftime('%Y')
-    this_month = today_datetime.strftime('%m')
-
+def clean_url(searched_item,data_filter=''):
+    """
+    OUTPUT : url to be fecthed for the searched_item and data_filter
+     ---------------------------------------------------
+    Parameters: 
+      today' - get headlines of the news that are released only in today 
+                       'this_week' - get headlines of the news that are released in this week 
+                       'this month' - news released in this month 
+                       'this_year' - news released in this year
+                        number : int/str input for number of days ago
+                        or '' blank to get all data
+    """
+    x =pd.datetime.today()
+    today =str(x)[:10]
+    yesterday = str(x + pd.Timedelta(days=-1))[:10]
+    this_week = str(x + pd.Timedelta(days=-7))[:10]
     if data_filter == 'today':
-        search_term = search_term + ' after:'+yesterday_datetime.strftime('%Y-%m-%d')
+        time = 'after' + yesterday
     elif data_filter == 'this_week':
-        search_term = search_term + ' after:'+last_datetime.strftime('%Y-%m-%d')+' before:'+today_date
-    elif data_filter == 'this_month':
-        temp_month = int(this_month)-1
-        temp_year = int(this_year)
-        if temp_month == 0:
-            temp_month = 12
-            temp_year = temp_year - 1
-        search_term = search_term + ' after:'+str(temp_year)+'-'+str(temp_month)+'-'+str(calendar.monthrange(temp_year, temp_month)[1])
+        time = 'after'+ this_week + '+before' + today
     elif data_filter == 'this_year':
-        search_term = search_term + ' after:'+ str(int(this_year)-1)
-    elif isinstance(data_filter, numbers.Integral):
-        last_datetime = today_datetime - timedelta(days=data_filter)
-        search_term = search_term + ' after:'+last_datetime.strftime('%Y-%m-%d')+' before:'+today_date
+        time = 'after'+str(x.year -1)
+    elif str(data_filter).isdigit():
+        temp_time = str(x + pd.Timedelta(days=-int(data_filter)))[:10]
+        time =  'after'+ temp_time + 'before' + today
+    else:
+        time=''
+    url = 'https://news.google.com/rss/search?q=uk+'+time+'&hl=en-US&gl=US&ceid=US%3Aen'
+    return url
 
+# clear the description
+def get_text(x):
+    start = x.find('<p>')+3
+    end = x.find('</p>')
+    return x[start:end]
 
-    news_url = "https://news.google.com/rss/search?" + urlencode({
-            'q':search_term, 'hl':'en-US', 'gl':'US', 'ceid':'US:en'
-            })
-
+def get_news(search_term, data_filter=''):
+    """
+    Search through Google News with the "search_term" and get the headlines 
+     and the contents of the news that was released today, this week, this month, 
+    or this year ("date_filter"). 
+    """
     
-
-    client = urlopen(news_url)
-    xml_page = client.read()
-    client.close()
-
-    soup_page = BeautifulSoup(xml_page,"xml")
-    news_list = soup_page.findAll("item")
+    url = get_url(search_term, data_filter='')
+    response = requests.get(url)
+    # get the root directly as we have text file of string now
+    root= ET.fromstring(response.text)
+    #get the required data
+    title = [i.text for i in root.findall('.//channel/item/title') ]
+    link = [i.text for i in root.findall('.//channel/item/link') ]
+    description = [i.text for i in root.findall('.//channel/item/description') ]
+    pubDate = [i.text for i in root.findall('.//channel/item/pubDate') ]
+    source = [i.text for i in root.findall('.//channel/item/source') ]
+    # clear the description
+    short_description = list(map(get_text,description))
     
-    if len(news_list) == 0:
-        return json.dumps({
-                'total_result': '0',
-                'search_results': 'There is no data about the search term '+search_term
-                })
-    
-    
-    # get news title, url and publish date
-    search_results = []
-    for num, news in enumerate(news_list, start=1):
-
-        news_dict = {}
-        news_dict['published_on'] = news.pubDate.string
-        news_dict['healines'] = news.title.string
-        news_dict['article_url'] = news.link.string
-        
-        
-        # clean description
-        temp_desc = str(news.description.get_text())
-        desc_soup = BeautifulSoup(temp_desc, 'html.parser')
-        # remove title and source in description
-        temp_desc = temp_desc.replace(str(desc_soup.a), '', 1)
-        temp_desc = temp_desc.replace(str(desc_soup.font), '', 1)
-        desc_soup = BeautifulSoup(temp_desc, 'html.parser')
-        temp_desc = desc_soup.get_text()
-
-        news_dict['short_description'] = temp_desc.lstrip()
-        
-        search_results.append(news_dict)
-
-    search_results.sort(key = lambda x: datetime.strptime(x['published_on'], '%a, %d %b %Y %H:%M:%S %Z')) 
-
-    
-    return json.dumps({
-            'total_result': str(len(search_results)),
-            'search_results': {
-                'headlines': list(map(lambda d: d['healines'], search_results)),
-                'short_descriptions': list(map(lambda d: d['short_description'], search_results)),
-                'article_urls': list(map(lambda d: d['article_url'], search_results)),
-                'published_on': list(map(lambda d: d['published_on'], search_results))
-            }
-            }, indent=4, sort_keys=True)
-
-
+    # set the data frame
+    df = pd.DataFrame({'title':title, 'link':link, 'description':short_description,'date':pubDate,'source':source })
+    # adjust the date column
+    df.date = pd.to_datetime(df.date, unit='ns')
+    # for saving purpose uncomment the below
+    df.to_csv(f'{search_term}_news.csv', encoding='utf-8-sig' , index=False)
+    return df
 
 if __name__ == "__main__":
     start = time.time()
-    print(get_news_data(search_term="UK", data_filter=5))
-    end = time.time()
-    print("Execution time", end - start)
-
+    search_term = str(input('Enter your search term here: '))
+    data = get_news(search_term, data_filter='5')
+    end = time.time()-start
+    print("Execution time", end)
